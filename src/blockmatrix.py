@@ -78,6 +78,40 @@ class BlockMatrix():
 
         return C
     
+    def __mul__(self, scalar):
+        return self.multiplyWithScalar(scalar)
+    
+    def __rmul__(self, scalar):
+        return self.multiplyWithScalar(scalar)
+    
+    def multiplyWithScalar(self, scalar):
+        C = BlockMatrix(self.rowPartitions, self.columnPartitions)
+        data = comm.sendrecv(self.data, C.blocks[self.index])
+        C.data = scalar * data
+        
+        comm.barrier()
+
+        return C
+    
+    def __matmul__(self, other):
+        C = BlockMatrix(self.rowPartitions, other.columnPartitions)
+
+        for j in range(len(C.columnPartitions)):
+            comm.isend(self.data, C.blocks[self.index[0], j])
+
+        for j in range(len(C.rowPartitions)):
+            comm.isend(other.data, C.blocks[j, other.index[0]])
+
+        for j in range(len(self.columnPartitions)):
+            ABlock = comm.recv(source=self.blocks[C.index[0], j])
+            print('received', C.index)
+            BBlock = comm.recv(source=other.blocks[j, C.index[0]])
+            C.data += ABlock @ BBlock
+
+        comm.barrier()
+
+        return C
+
     def full(self):
         allData = comm.gather([self.index, self.data])
         if comm.rank != 0:

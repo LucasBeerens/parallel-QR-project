@@ -9,6 +9,8 @@ A.fill()
 B.fill()
 C = A + B
 
+D = A @ B
+
 tmp = C - A - B
 
 fullMatrix = tmp.full()
