@@ -3,41 +3,52 @@ import mpi4py.rc
 mpi4py.rc.initialize = False
 from mpi4py import MPI
 
-comm = MPI.COMM_WORLD
+globalIDCounter = [0]
+
+def generateGlobalId():
+    globalIDCounter[0] += 1
+    return globalIDCounter[0]
 
 class BlockMatrix():
-    def __init__(self, rowPartitions, columnPartitions):
+    def __init__(self, rowPartitions, columnPartitions, comm=MPI.COMM_WORLD):
+        self.id = generateGlobalId()
         self.rowPartitions = rowPartitions
         self.columnPartitions = columnPartitions
+        self.comm = comm
 
-        worldSize = comm.Get_size()
+        worldSize = self.comm.Get_size()
 
         if self.numberOfBlocks > worldSize:
             raise Exception("Number of blocks must not be bigger than world size.")
 
-        rank = comm.Get_rank()
+        rank = self.comm.Get_rank()
 
         self.blocks = np.zeros((len(rowPartitions), len(columnPartitions)))
         for i in range(self.numberOfBlocks):
-            self.blocks[i % len(rowPartitions), i // len(columnPartitions)] = i
+            self.blocks[i % len(rowPartitions), i // len(rowPartitions)] = i
 
-        self.index = (rank % len(rowPartitions), rank // len(columnPartitions))
-        self.data = np.zeros((self.rowPartitions[self.index[0]], self.columnPartitions[self.index[1]]))
-        comm.barrier()
+        if rank < self.numberOfBlocks:
+            self.index = (rank % len(rowPartitions), rank // len(rowPartitions))
+            self.data = np.zeros((self.rowPartitions[self.index[0]], self.columnPartitions[self.index[1]]))
+        else:
+            self.index = None
+            self.data = None
+
+        self.comm.barrier()
 
     @property
     def numberOfBlocks(self):
         return len(self.rowPartitions) * len(self.columnPartitions)
 
     def fill(self):
-        self.data[:,:] = np.random.rand(*self.data.shape)
-        comm.barrier()
+        self.data[:,:] = np.random.randint(low=0, high=10, size=self.data.shape)
+        self.comm.barrier()
 
 
     def print(self):
         print(self.index)
         print(self.data)
-        comm.barrier()
+        self.comm.barrier()
 
     def __add__(self, other):
         if self.rowPartitions != other.rowPartitions or self.columnPartitions != other.columnPartitions:
@@ -45,12 +56,15 @@ class BlockMatrix():
 
         C = BlockMatrix(self.rowPartitions, self.columnPartitions)
 
-        AData = comm.sendrecv(self.data, C.blocks[self.index])
-        BData = comm.sendrecv(other.data, C.blocks[other.index])
+        if self.index is not None:
+            AData = self.comm.sendrecv(self.data, C.blocks[self.index])
+        if other.index is not None:
+            BData = self.comm.sendrecv(other.data, C.blocks[other.index])
 
-        C.data = AData + BData
+        if C.index is not None:
+            C.data = AData + BData
 
-        comm.barrier()
+        self.comm.barrier()
 
         return C
     
@@ -60,21 +74,28 @@ class BlockMatrix():
 
         C = BlockMatrix(self.rowPartitions, self.columnPartitions)
 
-        AData = comm.sendrecv(self.data, C.blocks[self.index])
-        BData = comm.sendrecv(other.data, C.blocks[other.index])
+        if self.index is not None:
+            AData = self.comm.sendrecv(self.data, C.blocks[self.index])
+        if other.index is not None:
+            BData = self.comm.sendrecv(other.data, C.blocks[other.index])
 
-        C.data = AData - BData
+        if C.index is not None:
+            C.data = AData - BData
 
-        comm.barrier()
+        self.comm.barrier()
 
         return C
 
     def __neg__(self):
         C = BlockMatrix(self.rowPartitions, self.columnPartitions)
-        data = comm.sendrecv(self.data, C.blocks[self.index])
-        C.data = -data
 
-        comm.barrier()
+        if self.index is not None:
+            data = self.comm.sendrecv(self.data, C.blocks[self.index])
+
+        if C.index is not None:
+            C.data = -data
+
+        self.comm.barrier()
 
         return C
     
@@ -86,44 +107,53 @@ class BlockMatrix():
     
     def multiplyWithScalar(self, scalar):
         C = BlockMatrix(self.rowPartitions, self.columnPartitions)
-        data = comm.sendrecv(self.data, C.blocks[self.index])
-        C.data = scalar * data
+
+        if self.index is not None:
+            data = self.comm.sendrecv(self.data, C.blocks[self.index])
+
+        if C.index is not None:
+            C.data = scalar * data
         
-        comm.barrier()
+        self.comm.barrier()
 
         return C
     
     def __matmul__(self, other):
         C = BlockMatrix(self.rowPartitions, other.columnPartitions)
 
-        for j in range(len(C.columnPartitions)):
-            comm.isend(self.data, C.blocks[self.index[0], j])
+        if self.index is not None:
+            for j in range(len(C.columnPartitions)):
+                self.comm.isend(self.data, C.blocks[self.index[0], j], tag=self.id)
 
-        for j in range(len(C.rowPartitions)):
-            comm.isend(other.data, C.blocks[j, other.index[0]])
+        if other.index is not None:
+            for j in range(len(C.rowPartitions)):
+                self.comm.isend(other.data, C.blocks[j, other.index[1]], tag=other.id)
 
-        for j in range(len(self.columnPartitions)):
-            ABlock = comm.recv(source=self.blocks[C.index[0], j])
-            print('received', C.index)
-            BBlock = comm.recv(source=other.blocks[j, C.index[0]])
-            C.data += ABlock @ BBlock
+        if C.index is not None:
+            for j in range(len(self.columnPartitions)):
+                ABlock = self.comm.recv(source=self.blocks[C.index[0], j], tag=self.id)
+                BBlock = self.comm.recv(source=other.blocks[j, C.index[1]], tag=other.id)
+                C.data += ABlock @ BBlock
 
-        comm.barrier()
+        self.comm.barrier()
 
         return C
 
     def full(self):
-        allData = comm.gather([self.index, self.data])
-        if comm.rank != 0:
+        allData = self.comm.gather([self.index, self.data])
+        if self.comm.rank != 0:
             return
 
         fullMatrix = np.zeros((sum(self.rowPartitions), sum(self.columnPartitions)))
 
         for index, data in allData:
+            if index is None:
+                continue
+
             rowFrom = sum(self.rowPartitions[:index[0]])
             rowTo = sum(self.rowPartitions[:index[0] + 1])
-            columnFrom = sum(self.columnPartitions[:index[0]])
-            columnTo = sum(self.columnPartitions[:index[0] + 1])
+            columnFrom = sum(self.columnPartitions[:index[1]])
+            columnTo = sum(self.columnPartitions[:index[1] + 1])
             fullMatrix[rowFrom:rowTo, columnFrom:columnTo] = data
 
         return fullMatrix
