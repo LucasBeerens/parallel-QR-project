@@ -30,23 +30,43 @@ def householderReflection(A):
 def qrDecomposition(A):
     Q = np.identity(A.shape[0])
     R = A.copy()
-    
-    for j in range(A.shape[1]):
-        v, beta = householderReflection(R[j:,j:])
-        Qj = np.identity(A.shape[0])
 
+    Y = np.zeros(A.shape)
+    W = np.zeros(A.shape)
+    
+    for j in range(min(A.shape)):
+        v, beta = householderReflection(R[j:,j:])
+        
+        if j == 0:
+            Y[:,0] = v
+            W[:,0] = -beta * v
+        else:
+            vHat = np.zeros(A.shape[0])
+            vHat[j:] = v
+            z = -beta * (vHat + W @ (Y.T @ vHat))
+            Y[:,j] = vHat
+            W[:,j] = z
+
+        Qj = np.identity(A.shape[0])
         Qj[j:,j:] = np.identity(A.shape[0] - j) - beta * np.outer(v, v)
 
+        # Can be done more efficiently by using the low-rank representation of Qj
         Q = Qj @ Q
         R = Qj @ R
 
-    return Q.T, R
+    return Q.T, R, W, Y
 
-A = np.random.rand(10, 10)
-Q, R = qrDecomposition(A)
+A = np.random.rand(6, 8)
+Q, R, W, Y = qrDecomposition(A)
 
-R *= (abs(R) > TOL)
-plt.spy(R)
+QWithWY = np.identity(A.shape[0]) + W @ Y.T
+RWithWY = QWithWY.T @ A
+
+RWithWY *= (abs(RWithWY) > TOL)
+plt.spy(RWithWY)
 plt.show()
 
 print(np.linalg.norm(Q @ R - A))
+print(np.linalg.norm(Q - QWithWY))
+print(np.linalg.norm(R - RWithWY))
+print(np.linalg.norm(Q @ Q.T - np.identity(A.shape[0])))
