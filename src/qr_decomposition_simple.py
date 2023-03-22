@@ -25,6 +25,7 @@ def householderReflection(A):
         beta = 2 * v[0]**2 / (sigma + v[0]**2)
         v = v / v[0]
 
+    print(beta)
     return v, beta
 
 def qrDecomposition(A):
@@ -56,17 +57,19 @@ def qrDecomposition(A):
 
     return Q.T, R, W, Y
 
-A = np.random.rand(6, 8)
-Q, R, W, Y = qrDecomposition(A)
+if __name__ == 'main':
 
-QWithWY = np.identity(A.shape[0]) + W @ Y.T
-RWithWY = QWithWY.T @ A
+    A = np.random.rand(6, 8)
+    Q, R, W, Y = qrDecomposition(A)
 
-RWithWY *= (abs(RWithWY) > TOL)
-plt.spy(RWithWY)
-plt.show()
+    QWithWY = np.identity(A.shape[0]) + W @ Y.T
+    RWithWY = QWithWY.T @ A
 
-print(np.linalg.norm(Q @ R - A))
-print(np.linalg.norm(Q - QWithWY))
-print(np.linalg.norm(R - RWithWY))
-print(np.linalg.norm(Q @ Q.T - np.identity(A.shape[0])))
+    RWithWY *= (abs(RWithWY) > TOL)
+    plt.spy(RWithWY)
+    plt.show()
+
+    print(np.linalg.norm(Q @ R - A))
+    print(np.linalg.norm(Q - QWithWY))
+    print(np.linalg.norm(R - RWithWY))
+    print(np.linalg.norm(Q @ Q.T - np.identity(A.shape[0])))

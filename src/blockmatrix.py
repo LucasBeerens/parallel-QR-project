@@ -47,38 +47,60 @@ class BlockMatrix():
         subCommunicator = self.comm.Split(0 if isFirstColumn else MPI.UNDEFINED, self.index[0] if self.index is not None else MPI.UNDEFINED)
 
         if isFirstColumn:
-            self.householderReflectionAux(subCommunicator, j)
+            for j in range(min(self.columnPartitions[0], sum(self.rowPartitions))):
+                self.householderReflectionAux(subCommunicator, j)
 
         self.comm.barrier()
 
     def householderReflectionAux(self, localComm, j):
-        x = self.data[:,0]
-        n = len(x)
+        rowOffset = sum(self.rowPartitions[:self.index[0]])
+        rowEnd = sum(self.rowPartitions[:self.index[0] + 1])
 
-        offset = 1 if self.index[0] == 0 else 0
-        sigma = localComm.allreduce(np.dot(x[offset:n], x[offset:n]))
+        focusedBlockRank = 0
+        totalRowOffset = 0
 
-        v = np.zeros(n)
-        v[0] = 1 if self.index[0] == 0 else 0
-        v[offset:n] = x[offset:n]
+        for i in range(len(self.rowPartitions) - 1):
+            if j >= totalRowOffset and j < totalRowOffset + self.rowPartitions[i + 1]:
+                focusedBlockRank = i
 
+            totalRowOffset += self.rowPartitions[i]
+
+        isFocusedBlock = j >= rowOffset and j < rowEnd
+        localFocusedIndex = j - rowOffset if isFocusedBlock else None
+
+        x = np.zeros(self.data.shape[0])
+        if j < rowEnd:
+            k = max(0, (j - rowOffset))
+            x[k:] = self.data[k:,j]
+
+        localSigma = np.dot(x, x)
+
+        if isFocusedBlock:
+            localSigma -= x[localFocusedIndex]**2
+
+        sigma = localComm.allreduce(localSigma)
+
+        v = x.copy()
+
+        if isFocusedBlock:
+            v[localFocusedIndex] = 1
+        
         if abs(sigma) < TOL:
             beta = 0
         else:
             beta = None
 
-            if self.index[0] == 0:
-                mu = np.sqrt(x[0]**2 + sigma)
-                if x[0] <= 0:
-                    v[0] = x[0] - mu
+            if isFocusedBlock:
+                mu = np.sqrt(x[localFocusedIndex]**2 + sigma)
+                if x[localFocusedIndex] <= 0:
+                    v[localFocusedIndex] = x[localFocusedIndex] - mu
                 else:
-                    v[0] = -sigma / (x[0] + mu)
+                    v[localFocusedIndex] = -sigma / (x[localFocusedIndex] + mu)
                 
-                beta = 2 * v[0]**2 / (sigma + v[0]**2)
+                beta = 2 * v[localFocusedIndex]**2 / (sigma + v[localFocusedIndex]**2)
             
-            scalingFactor = localComm.bcast(v[0])
-            beta = localComm.bcast(beta)
-            print(beta)
+            scalingFactor = localComm.bcast(v[localFocusedIndex] if isFocusedBlock else None, focusedBlockRank)
+            beta = localComm.bcast(beta, focusedBlockRank)
 
             v = v / scalingFactor
 

@@ -1,16 +1,21 @@
 from blockmatrix import BlockMatrix
 from mpi4py import MPI
 
+from qr_decomposition_simple import qrDecomposition
+
 MPI.Init()
 
-A = BlockMatrix([2, 2], [2, 2, 3])
+A = BlockMatrix([3, 2, 5], [4])
 # B = BlockMatrix([2, 2, 3], [2, 2])
 A.fill()
 # B.fill()
 # C = A + B
 
 A.householderReflection()
+fullMatrixA = A.full()
 
+if fullMatrixA is not None:
+    qrDecomposition(fullMatrixA)
 # D = A @ B
 # fullMatrixA = A.full()
 # fullMatrixB = B.full()
