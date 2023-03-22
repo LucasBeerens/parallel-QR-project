@@ -3,6 +3,8 @@ import mpi4py.rc
 mpi4py.rc.initialize = False
 from mpi4py import MPI
 
+TOL = 1e-8
+
 globalIDCounter = [0]
 
 def generateGlobalId():
@@ -33,15 +35,55 @@ class BlockMatrix():
         else:
             self.index = None
             self.data = None
-            print('rank:{}'.format(rank))
-            print('blocks:{}'.format(self.numberOfBlocks))
-            print('\n')
-
+            
         self.comm.barrier()
 
     @property
     def numberOfBlocks(self):
         return len(self.rowPartitions) * len(self.columnPartitions)
+
+    def householderReflection(self):
+        isFirstColumn = self.index is not None and self.index[1] == 0
+        subCommunicator = self.comm.Split(0 if isFirstColumn else MPI.UNDEFINED, self.index[0] if self.index is not None else MPI.UNDEFINED)
+
+        if isFirstColumn:
+            self.householderReflectionAux(subCommunicator, j)
+
+        self.comm.barrier()
+
+    def householderReflectionAux(self, localComm, j):
+        x = self.data[:,0]
+        n = len(x)
+
+        offset = 1 if self.index[0] == 0 else 0
+        sigma = localComm.allreduce(np.dot(x[offset:n], x[offset:n]))
+
+        v = np.zeros(n)
+        v[0] = 1 if self.index[0] == 0 else 0
+        v[offset:n] = x[offset:n]
+
+        if abs(sigma) < TOL:
+            beta = 0
+        else:
+            beta = None
+
+            if self.index[0] == 0:
+                mu = np.sqrt(x[0]**2 + sigma)
+                if x[0] <= 0:
+                    v[0] = x[0] - mu
+                else:
+                    v[0] = -sigma / (x[0] + mu)
+                
+                beta = 2 * v[0]**2 / (sigma + v[0]**2)
+            
+            scalingFactor = localComm.bcast(v[0])
+            beta = localComm.bcast(beta)
+            print(beta)
+
+            v = v / scalingFactor
+
+        return v, beta
+
 
     def fill(self):
         if self.index is not None:
