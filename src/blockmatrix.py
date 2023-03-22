@@ -33,6 +33,9 @@ class BlockMatrix():
         else:
             self.index = None
             self.data = None
+            print('rank:{}'.format(rank))
+            print('blocks:{}'.format(self.numberOfBlocks))
+            print('\n')
 
         self.comm.barrier()
 
@@ -41,7 +44,8 @@ class BlockMatrix():
         return len(self.rowPartitions) * len(self.columnPartitions)
 
     def fill(self):
-        self.data[:,:] = np.random.randint(low=0, high=10, size=self.data.shape)
+        if self.index is not None:
+            self.data[:,:] = np.random.randint(low=0, high=10, size=self.data.shape)
         self.comm.barrier()
 
 
@@ -137,6 +141,20 @@ class BlockMatrix():
 
         self.comm.barrier()
 
+        return C
+    
+    def subselect(self,rows,columns):
+        rowPartitions = [self.rowPartitions[i] for i in rows]
+        columnPartitions = [self.columnPartitions[i] for i in columns]
+        C = BlockMatrix(rowPartitions, columnPartitions)
+
+        for numi,i in enumerate(rows):
+            for numj, j in enumerate(columns):
+                if self.index == (i,j):
+                    self.comm.isend(self.data, C.blocks[numi,numj], tag=numi*len(columns)+numj)
+                if self.index == (numi,numj):
+                    C.data = self.comm.recv(source=self.blocks[i,j],tag=self.index[0]*len(columns)+self.index[1])
+        self.comm.barrier()
         return C
 
     def full(self):

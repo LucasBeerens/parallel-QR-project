@@ -14,10 +14,20 @@ fullMatrixA = A.full()
 fullMatrixB = B.full()
 fullMatrixD = D.full()
 
+#E = BlockMatrix([2,2],[2,2])
+#E.fill()
+
+#F = E.subselect([0,1],[0])
+
+#fullE = E.full()
+#fullF = F.full()
+
 if MPI.COMM_WORLD.rank == 0:
     print(fullMatrixA)
     print(fullMatrixB)
     print(fullMatrixD)
     print(fullMatrixA @ fullMatrixB)
+#    print(fullE)
+#    print(fullF)
 
 MPI.Finalize()
