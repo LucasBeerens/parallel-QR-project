@@ -42,6 +42,38 @@ class BlockMatrix():
     def numberOfBlocks(self):
         return len(self.rowPartitions) * len(self.columnPartitions)
 
+    def qr(self):
+        isFirstColumn = self.index is not None and self.index[1] == 0
+        subCommunicator = self.comm.Split(0 if isFirstColumn else MPI.UNDEFINED, self.index[0] if self.index is not None else MPI.UNDEFINED)
+
+        if isFirstColumn:
+            self.qrAux(subCommunicator)
+
+        self.comm.barrier()
+
+    def qrAux(self, localComm):
+        R = self.data
+
+        Y = np.zeros(self.data.shape)
+        W = np.zeros(self.data.shape)
+        
+        for j in range(min(self.columnPartitions[0], sum(self.rowPartitions))):
+            v, beta = self.householderReflectionAux(localComm, j)
+            print(j, beta)
+            if j == 0:
+                Y[:,0] = v
+                W[:,0] = -beta * v
+            else:
+                z = -beta * (v + W @ (Y.T @ v))
+                Y[:,j] = v
+                W[:,j] = z
+
+            vR = v @ R
+            K = localComm.allreduce(vR)
+            R += -beta * (np.outer(v, K))
+
+        return W, Y
+
     def householderReflection(self):
         isFirstColumn = self.index is not None and self.index[1] == 0
         subCommunicator = self.comm.Split(0 if isFirstColumn else MPI.UNDEFINED, self.index[0] if self.index is not None else MPI.UNDEFINED)

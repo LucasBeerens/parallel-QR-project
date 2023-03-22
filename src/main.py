@@ -8,11 +8,12 @@ MPI.Init()
 A = BlockMatrix([3, 2, 5], [4])
 # B = BlockMatrix([2, 2, 3], [2, 2])
 A.fill()
+fullMatrixA = A.full()
+
 # B.fill()
 # C = A + B
 
-A.householderReflection()
-fullMatrixA = A.full()
+A.qr()
 
 if fullMatrixA is not None:
     qrDecomposition(fullMatrixA)
