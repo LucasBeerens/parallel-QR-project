@@ -63,18 +63,27 @@ class BlockMatrix():
         return R
 
     def applyWY(self, R, W, Y, columnPartitionIndex):
+        # Send W and Y in seperate sends, since then Send instead of send can be used.
+        # The advantage here is that Send doesn't require a pickle first and prevents problems
+        # with too large objects
+        WTag = 0
+        YTag = 1
+
         if W is not None and Y is not None:
             for j in range(columnPartitionIndex + 1, len(self.columnPartitions)):
-                self.comm.isend((W, Y), self.blocks[self.index[0], j])
+                self.comm.Isend(W, self.blocks[self.index[0], j], tag=WTag)
+                self.comm.Isend(Y, self.blocks[self.index[0], j], tag=YTag)
 
         row = MPI.UNDEFINED if self.index is None else self.index[0]
         column = MPI.UNDEFINED if self.index is None else self.index[1]
         columnComm = self.comm.Split(column, row)
 
         if self.index is not None and self.index[1] > columnPartitionIndex:
-            W, Y = self.comm.recv(source=self.blocks[self.index[0], columnPartitionIndex])
-            print(self.index)
-            print(W)
+            W = np.empty((self.data.shape[0], self.columnPartitions[columnPartitionIndex]))
+            Y = np.empty((self.data.shape[0], self.columnPartitions[columnPartitionIndex]))
+            self.comm.Recv(W, source=self.blocks[self.index[0], columnPartitionIndex], tag=WTag)
+            self.comm.Recv(Y, source=self.blocks[self.index[0], columnPartitionIndex], tag=YTag)
+            
             WRLocal = W.T @ R.data
             WR = columnComm.allreduce(WRLocal)
             R.data += Y @ WR
@@ -263,16 +272,18 @@ class BlockMatrix():
 
         if self.index is not None:
             for j in range(len(C.columnPartitions)):
-                self.comm.isend(self.data, C.blocks[self.index[0], j], tag=self.id)
+                self.comm.Isend(self.data, C.blocks[self.index[0], j], tag=self.id)
 
         if other.index is not None:
             for j in range(len(C.rowPartitions)):
-                self.comm.isend(other.data, C.blocks[j, other.index[1]], tag=other.id)
+                self.comm.Isend(other.data, C.blocks[j, other.index[1]], tag=other.id)
 
         if C.index is not None:
             for j in range(len(self.columnPartitions)):
-                ABlock = self.comm.recv(source=self.blocks[C.index[0], j], tag=self.id)
-                BBlock = self.comm.recv(source=other.blocks[j, C.index[1]], tag=other.id)
+                ABlock = np.empty((self.rowPartitions[C.index[0]], self.columnPartitions[j]))
+                self.comm.Recv(ABlock, source=self.blocks[C.index[0], j], tag=self.id)
+                BBlock = np.empty((other.rowPartitions[j], other.columnPartitions[C.index[1]]))
+                self.comm.Recv(BBlock, source=other.blocks[j, C.index[1]], tag=other.id)
                 C.data += ABlock @ BBlock
 
         self.comm.barrier()
@@ -311,3 +322,26 @@ class BlockMatrix():
             fullMatrix[rowFrom:rowTo, columnFrom:columnTo] = data
 
         return fullMatrix
+    
+    def diag(self):
+        if self.index is not None:
+            row_from = sum(self.rowPartitions[:self.index[0]])
+            row_to = row_from + self.rowPartitions[self.index[0]]
+            column_from = sum(self.columnPartitions[:self.index[1]])
+            column_to = column_from + self.columnPartitions[self.index[1]]
+
+        diag = []
+
+        for row in range(row_from, row_to):
+            for column in range(column_from, column_to):
+                if row != column:
+                    continue
+
+                diag.append(self.data[row - row_from, column - column_from])
+
+        diag = self.comm.gather(np.array(diag))
+
+        if self.comm.rank != 0:
+            return None
+
+        return diag

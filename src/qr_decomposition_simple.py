@@ -25,7 +25,6 @@ def householderReflection(A):
         beta = 2 * v[0]**2 / (sigma + v[0]**2)
         v = v / v[0]
 
-    print(beta)
     return v, beta
 
 def qrDecomposition(A):
