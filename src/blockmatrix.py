@@ -43,59 +43,86 @@ class BlockMatrix():
         return len(self.rowPartitions) * len(self.columnPartitions)
 
     def qr(self):
-        isFirstColumn = self.index is not None and self.index[1] == 0
-        subCommunicator = self.comm.Split(0 if isFirstColumn else MPI.UNDEFINED, self.index[0] if self.index is not None else MPI.UNDEFINED)
+        for j in range(len(self.columnPartitions)):
+            isFocusedColumn = self.index is not None and self.index[1] == j
+            subCommunicator = self.comm.Split(0 if isFocusedColumn else MPI.UNDEFINED, self.index[0] if self.index is not None else MPI.UNDEFINED)
+            
+            W, Y = None, None
 
-        if isFirstColumn:
-            self.qrAux(subCommunicator)
+            if isFocusedColumn:
+                W, Y = self.qrAux(j, subCommunicator)
+            
+            self.comm.barrier()
+
+            self.applyWY(W, Y, j)
 
         self.comm.barrier()
 
-    def qrAux(self, localComm):
+    def applyWY(self, W, Y, columnPartitionIndex):
+        if W is not None and Y is not None:
+            for j in range(columnPartitionIndex + 1, len(self.columnPartitions)):
+                self.comm.isend((W, Y), self.blocks[self.index[0], j])
+
+        row = MPI.UNDEFINED if self.index is None else self.index[0]
+        column = MPI.UNDEFINED if self.index is None else self.index[1]
+        columnComm = self.comm.Split(column, row)
+
+        if self.index is not None and self.index[1] > columnPartitionIndex:
+            W, Y = self.comm.recv(source=self.blocks[self.index[0], columnPartitionIndex])
+            print(self.index)
+            print(W)
+            WRLocal = W.T @ self.data
+            WR = columnComm.allreduce(WRLocal)
+            self.data += Y @ WR
+
+        self.comm.barrier()
+            
+
+    def qrAux(self, columnPartitionIndex, localComm):
         R = self.data
 
         Y = np.zeros(self.data.shape)
         W = np.zeros(self.data.shape)
         
-        for j in range(min(self.columnPartitions[0], sum(self.rowPartitions))):
-            v, beta = self.householderReflectionAux(localComm, j)
-            print(j, beta)
-            if j == 0:
+        columnOffset = sum(self.columnPartitions[:columnPartitionIndex])
+
+        for j in range(columnOffset, min(columnOffset + self.columnPartitions[columnPartitionIndex], sum(self.rowPartitions))):
+            v, beta = self.householderReflectionAux(localComm, self.index[1], j)
+            
+            if j - columnOffset == 0:
                 Y[:,0] = v
                 W[:,0] = -beta * v
             else:
-                z = -beta * (v + W @ (Y.T @ v))
-                Y[:,j] = v
-                W[:,j] = z
+                localYv = Y.T @ v
+                Yv = localComm.allreduce(localYv)
+
+                z = -beta * (v + W @ Yv)
+                Y[:,j - columnOffset] = v
+                W[:,j - columnOffset] = z
 
             vR = v @ R
             K = localComm.allreduce(vR)
-            R += -beta * (np.outer(v, K))
+            R -= beta * np.outer(v, K)
 
         return W, Y
 
-    def householderReflection(self):
-        isFirstColumn = self.index is not None and self.index[1] == 0
-        subCommunicator = self.comm.Split(0 if isFirstColumn else MPI.UNDEFINED, self.index[0] if self.index is not None else MPI.UNDEFINED)
-
-        if isFirstColumn:
-            for j in range(min(self.columnPartitions[0], sum(self.rowPartitions))):
-                self.householderReflectionAux(subCommunicator, j)
-
-        self.comm.barrier()
-
-    def householderReflectionAux(self, localComm, j):
+    def householderReflectionAux(self, localComm, columnPartition, j):
         rowOffset = sum(self.rowPartitions[:self.index[0]])
         rowEnd = sum(self.rowPartitions[:self.index[0] + 1])
 
-        focusedBlockRank = 0
+        columnOffset = sum(self.columnPartitions[:columnPartition])
+        relativeColumn = j - columnOffset
+        
+        focusedBlockRank = None
         totalRowOffset = 0
-
-        for i in range(len(self.rowPartitions) - 1):
-            if j >= totalRowOffset and j < totalRowOffset + self.rowPartitions[i + 1]:
+        for i in range(len(self.rowPartitions)):
+            if j >= totalRowOffset and j < totalRowOffset + self.rowPartitions[i]:
                 focusedBlockRank = i
+                break
 
             totalRowOffset += self.rowPartitions[i]
+        
+        focusedBlockRank = len(self.rowPartitions) - 1 if focusedBlockRank is None else focusedBlockRank
 
         isFocusedBlock = j >= rowOffset and j < rowEnd
         localFocusedIndex = j - rowOffset if isFocusedBlock else None
@@ -103,7 +130,7 @@ class BlockMatrix():
         x = np.zeros(self.data.shape[0])
         if j < rowEnd:
             k = max(0, (j - rowOffset))
-            x[k:] = self.data[k:,j]
+            x[k:] = self.data[k:,relativeColumn]
 
         localSigma = np.dot(x, x)
 
