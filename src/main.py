@@ -17,15 +17,15 @@ fullMatrixA = A.full()
 # B.fill()
 # C = A + B
 
-A.qr()
-fullMatrixQR = A.full()
+R = A.qr()
+fullMatrixR = R.full()
 
-if fullMatrixQR is not None:
-    fullMatrixQR *= (abs(fullMatrixQR) > 1e-6)
-    plt.spy(fullMatrixQR)
+if fullMatrixR is not None:
+    fullMatrixR *= (abs(fullMatrixR) > 1e-6)
+    plt.spy(fullMatrixR)
     plt.show()
-    Q, R, _, _ = qrDecomposition(fullMatrixA)
-    print(np.max(abs(fullMatrixQR - R)))
+    QSeq, RSeq, _, _ = qrDecomposition(fullMatrixA)
+    print(np.max(abs(fullMatrixR - RSeq)))
 # D = A @ B
 # fullMatrixA = A.full()
 # fullMatrixB = B.full()

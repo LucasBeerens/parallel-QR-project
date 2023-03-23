@@ -43,6 +43,8 @@ class BlockMatrix():
         return len(self.rowPartitions) * len(self.columnPartitions)
 
     def qr(self):
+        R = self.copy()
+
         for j in range(len(self.columnPartitions)):
             isFocusedColumn = self.index is not None and self.index[1] == j
             subCommunicator = self.comm.Split(0 if isFocusedColumn else MPI.UNDEFINED, self.index[0] if self.index is not None else MPI.UNDEFINED)
@@ -50,15 +52,17 @@ class BlockMatrix():
             W, Y = None, None
 
             if isFocusedColumn:
-                W, Y = self.qrAux(j, subCommunicator)
+                W, Y = self.qrAux(R, j, subCommunicator)
             
             self.comm.barrier()
 
-            self.applyWY(W, Y, j)
+            self.applyWY(R, W, Y, j)
 
         self.comm.barrier()
 
-    def applyWY(self, W, Y, columnPartitionIndex):
+        return R
+
+    def applyWY(self, R, W, Y, columnPartitionIndex):
         if W is not None and Y is not None:
             for j in range(columnPartitionIndex + 1, len(self.columnPartitions)):
                 self.comm.isend((W, Y), self.blocks[self.index[0], j])
@@ -71,23 +75,21 @@ class BlockMatrix():
             W, Y = self.comm.recv(source=self.blocks[self.index[0], columnPartitionIndex])
             print(self.index)
             print(W)
-            WRLocal = W.T @ self.data
+            WRLocal = W.T @ R.data
             WR = columnComm.allreduce(WRLocal)
-            self.data += Y @ WR
+            R.data += Y @ WR
 
         self.comm.barrier()
             
 
-    def qrAux(self, columnPartitionIndex, localComm):
-        R = self.data
-
+    def qrAux(self, R, columnPartitionIndex, localComm):
         Y = np.zeros(self.data.shape)
         W = np.zeros(self.data.shape)
         
         columnOffset = sum(self.columnPartitions[:columnPartitionIndex])
 
         for j in range(columnOffset, min(columnOffset + self.columnPartitions[columnPartitionIndex], sum(self.rowPartitions))):
-            v, beta = self.householderReflectionAux(localComm, self.index[1], j)
+            v, beta = self.householderReflectionAux(R, localComm, self.index[1], j)
             
             if j - columnOffset == 0:
                 Y[:,0] = v
@@ -100,13 +102,13 @@ class BlockMatrix():
                 Y[:,j - columnOffset] = v
                 W[:,j - columnOffset] = z
 
-            vR = v @ R
+            vR = v @ R.data
             K = localComm.allreduce(vR)
-            R -= beta * np.outer(v, K)
+            R.data -= beta * np.outer(v, K)
 
         return W, Y
 
-    def householderReflectionAux(self, localComm, columnPartition, j):
+    def householderReflectionAux(self, R, localComm, columnPartition, j):
         rowOffset = sum(self.rowPartitions[:self.index[0]])
         rowEnd = sum(self.rowPartitions[:self.index[0] + 1])
 
@@ -130,7 +132,7 @@ class BlockMatrix():
         x = np.zeros(self.data.shape[0])
         if j < rowEnd:
             k = max(0, (j - rowOffset))
-            x[k:] = self.data[k:,relativeColumn]
+            x[k:] = R.data[k:,relativeColumn]
 
         localSigma = np.dot(x, x)
 
@@ -171,6 +173,17 @@ class BlockMatrix():
             self.data[:,:] = np.random.randint(low=0, high=10, size=self.data.shape)
         self.comm.barrier()
 
+    # TODO: make sure that it is copied to the same cores
+    def copy(self):
+        copiedMatrix = BlockMatrix(self.rowPartitions, self.columnPartitions, self.comm)
+
+        if self.index is not None:
+            self.comm.isend(self.data, copiedMatrix.blocks[self.index])
+
+        if copiedMatrix.index is not None:
+            copiedMatrix.data = self.comm.recv(source=self.blocks[copiedMatrix.index])
+
+        return copiedMatrix
 
     def print(self):
         print(self.index)
