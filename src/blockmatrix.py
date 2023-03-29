@@ -43,6 +43,9 @@ class BlockMatrix():
         return len(self.rowPartitions) * len(self.columnPartitions)
 
     def qr(self):
+        # TODO: make sure blocks of Q are stored in such a way that communication is minimized
+        Q = BlockMatrix(self.rowPartitions, self.rowPartitions)
+        Q.setIdentity()
         R = self.copy()
 
         for j in range(len(self.columnPartitions)):
@@ -56,13 +59,14 @@ class BlockMatrix():
             
             self.comm.barrier()
 
-            self.applyWY(R, W, Y, j)
+            self.applyWYToR(R, W, Y, j)
+            self.applyWYToQ(Q, W, Y, j)
 
         self.comm.barrier()
 
-        return R
+        return Q.transpose(), R
 
-    def applyWY(self, R, W, Y, columnPartitionIndex):
+    def applyWYToR(self, R, W, Y, columnPartitionIndex):
         # Send W and Y in seperate sends, since then Send instead of send can be used.
         # The advantage here is that Send doesn't require a pickle first and prevents problems
         # with too large objects
@@ -89,7 +93,34 @@ class BlockMatrix():
             R.data += Y @ WR
 
         self.comm.barrier()
+    
+    def applyWYToQ(self, Q, W, Y, columnPartitionIndex):
+        # Send W and Y in seperate sends, since then Send instead of send can be used.
+        # The advantage here is that Send doesn't require a pickle first and prevents problems
+        # with too large objects
+        WTag = 0
+        YTag = 1
+
+        if W is not None and Y is not None:
+            for j in range(0, len(Q.columnPartitions)):
+                self.comm.Isend(W, Q.blocks[self.index[0], j], tag=WTag)
+                self.comm.Isend(Y, Q.blocks[self.index[0], j], tag=YTag)
+
+        row = MPI.UNDEFINED if Q.index is None else Q.index[0]
+        column = MPI.UNDEFINED if Q.index is None else Q.index[1]
+        columnComm = Q.comm.Split(column, row)
+
+        if Q.index is not None:
+            W = np.empty((Q.data.shape[0], self.columnPartitions[columnPartitionIndex]))
+            Y = np.empty((Q.data.shape[0], self.columnPartitions[columnPartitionIndex]))
+            self.comm.Recv(W, source=self.blocks[Q.index[0], columnPartitionIndex], tag=WTag)
+            self.comm.Recv(Y, source=self.blocks[Q.index[0], columnPartitionIndex], tag=YTag)
             
+            WQLocal = W.T @ Q.data
+            WQ = columnComm.allreduce(WQLocal)
+            Q.data += Y @ WQ
+
+        self.comm.barrier()
 
     def qrAux(self, R, columnPartitionIndex, localComm):
         Y = np.zeros(self.data.shape)
@@ -176,10 +207,44 @@ class BlockMatrix():
 
         return v, beta
 
+    def transpose(self):
+        B = BlockMatrix(self.columnPartitions, self.rowPartitions)
+
+        if self.index is not None:
+            self.comm.Isend(self.data, B.blocks[self.index[1], self.index[0]])
+
+        if B.index is not None:
+            buffer = np.empty((self.rowPartitions[B.index[1]], self.columnPartitions[B.index[0]]))
+            self.comm.Recv(buffer, self.blocks[B.index[1], B.index[0]])
+            B.data = buffer.T
+
+        self.comm.barrier()
+
+        return B
 
     def fill(self):
         if self.index is not None:
             self.data[:,:] = np.random.randint(low=0, high=10, size=self.data.shape)
+        self.comm.barrier()
+
+    def setIdentity(self):
+        assert sum(self.rowPartitions) == sum(self.columnPartitions)
+
+        if self.index is not None:
+            row_from = sum(self.rowPartitions[:self.index[0]])
+            row_to = row_from + self.rowPartitions[self.index[0]]
+            column_from = sum(self.columnPartitions[:self.index[1]])
+            column_to = column_from + self.columnPartitions[self.index[1]]
+
+            self.data[:] = 0
+
+            for row in range(row_from, row_to):
+                for column in range(column_from, column_to):
+                    if row != column:
+                        continue
+
+                    self.data[row - row_from, column - column_from] = 1
+
         self.comm.barrier()
 
     # TODO: make sure that it is copied to the same cores

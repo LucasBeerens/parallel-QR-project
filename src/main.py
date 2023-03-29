@@ -9,7 +9,7 @@ from qr_decomposition_simple import qrDecomposition
 MPI.Init()
 
 # A = BlockMatrix([3, 2, 5], [2, 2])
-A = BlockMatrix(2 * [50], 2 * [20])
+A = BlockMatrix(5 * [40], 4 * [50])
 # B = BlockMatrix([2, 2, 3], [2, 2])
 A.fill()
 
@@ -17,16 +17,20 @@ fullMatrixA = A.full()
 # B.fill()
 # C = A + B
 
-R = A.qr()
+Q, R = A.qr()
 fullMatrixR = R.full()
-diag = R.diag()
+fullMatrixQ = Q.full()
+# diag = R.diag()
 
 if fullMatrixR is not None:
     fullMatrixR *= (abs(fullMatrixR) > 1e-6)
     plt.spy(fullMatrixR)
     plt.show()
     QSeq, RSeq, _, _ = qrDecomposition(fullMatrixA)
+
     print(np.max(abs(fullMatrixR - RSeq)))
+    print(np.max(abs(fullMatrixA - fullMatrixQ @ fullMatrixR)))
+    print(np.max(abs(np.identity(fullMatrixQ.shape[0]) - fullMatrixQ.T @ fullMatrixQ)))
 
 # D = A @ B
 # fullMatrixA = A.full()
